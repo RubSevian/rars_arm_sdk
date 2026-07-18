@@ -1,6 +1,4 @@
-#include "include/arm_motor_control.hpp"
-#include "include/arm_serial_port.hpp"
-#include "include/arm_types.hpp"
+#include "include/rars_arm.hpp"
 
 #include <QApplication>
 #include <QGridLayout>
@@ -26,26 +24,6 @@ constexpr int kSendPeriodMs		= 5;  // 200 Гц
 constexpr int kFeedbackPeriodMs = 30; // около 33 Гц
 
 constexpr float kPi = 3.14159265358979323846F;
-
-constexpr std::array<float, rars_arm::kArmMotorCount> kMotorKp{
-  60.0F, // M1 DM4340
-  60.0F, // M2 DM4340
-  60.0F, // M3 DM4340
-  20.0F, // M4 DM4310
-  20.0F, // M5 DM4310
-  20.0F, // M6 DM4310
-  20.0F	 // M7 DM4310
-};
-
-constexpr std::array<float, rars_arm::kArmMotorCount> kMotorKd{
-  1.0F, // M1
-  1.0F, // M2
-  1.0F, // M3
-  1.0F, // M4
-  1.0F, // M5
-  1.0F, // M6
-  1.0F	// M7
-};
 
 float sliderToRadians(int value)
 {
@@ -99,45 +77,17 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
 
-    rars_arm::ArmSerialPort serial("/dev/ttyACM0", 921600);
+    rars_arm::RarsArm arm;
+    rars_arm::RarsArm::MotorValues target_positions{};
+    rars_arm::ArmLowState arm_state;
 
-    rars_arm::ArmMotorControl motor_control;
-    rars_arm::ArmLowCmd		  arm_command;
-    rars_arm::ArmLowState	  arm_state;
-
-    if (!serial.open())
+    if (!arm.connect())
     {
         QMessageBox::critical(nullptr,
-                              QStringLiteral("Serial error"),
-                              QString::fromStdString(serial.lastError()));
+                              QStringLiteral("Connection error"),
+                              QString::fromStdString(arm.lastError()));
 
         return 1;
-    }
-
-    if (!serial.startReceiving())
-    {
-        QMessageBox::critical(nullptr,
-                              QStringLiteral("Receiving error"),
-                              QString::fromStdString(serial.lastError()));
-
-        serial.close();
-        return 1;
-    }
-
-    for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
-    {
-        auto& command = arm_command.motor_cmd()[i];
-
-        command.motor_type() =
-          i < 3 ? rars_arm::ArmMotorType::DM4340 : rars_arm::ArmMotorType::DM4310;
-
-        command.mode() = rars_arm::ArmControlMode::MIT;
-
-        command.q()	  = 0.0F;
-        command.dq()  = 0.0F;
-        command.kp()  = kMotorKp[i];
-        command.kd()  = kMotorKd[i];
-        command.tau() = 0.0F;
     }
 
     QWidget window;
@@ -178,10 +128,10 @@ int main(int argc, char* argv[])
 
         QObject::connect(sliders[i],
                          &QSlider::valueChanged,
-                         [&arm_command, &target_labels, i](int value) {
+                         [&target_positions, &target_labels, i](int value) {
                              const float position = sliderToRadians(value);
 
-                             arm_command.motor_cmd()[i].q() = position;
+                             target_positions[i] = position;
 
                              target_labels[i]->setText(
                                QStringLiteral("target: %1 rad").arg(position, 0, 'f', 3));
@@ -216,14 +166,14 @@ int main(int argc, char* argv[])
     bool motors_enabled = false;
 
     QObject::connect(&feedback_timer, &QTimer::timeout, [&]() {
-        if (!motor_control.read(serial, arm_state))
+        if (!arm.tryReadState(arm_state))
             return;
 
         for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
         {
             const auto& state = arm_state.motor_state()[i];
 
-            const float target = arm_command.motor_cmd()[i].q();
+            const float target = target_positions[i];
 
             const float current = state.q();
 
@@ -252,16 +202,17 @@ int main(int argc, char* argv[])
           if (!motors_enabled)
               return;
 
-          if (!motor_control.write(serial, arm_command))
+          if (!arm.sendPositionTargets(target_positions))
           {
+              const std::string write_error = arm.lastError();
               send_timer.stop();
               motors_enabled = false;
 
-              motor_control.disable(serial);
+              arm.disable();
 
               QMessageBox::critical(&window,
                                     QStringLiteral("Write error"),
-                                    QString::fromStdString(motor_control.lastError()));
+                                    QString::fromStdString(write_error));
           }
       });
 
@@ -276,33 +227,20 @@ int main(int argc, char* argv[])
 
           for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
           {
-              arm_command.motor_cmd()[i].q() = sliderToRadians(sliders[i]->value());
+              target_positions[i] = sliderToRadians(sliders[i]->value());
           }
 
-          if (!motor_control.enable(serial))
+          if (!arm.enable())
           {
               QMessageBox::critical(&window,
                                     QStringLiteral("Enable error"),
-                                    QString::fromStdString(motor_control.lastError()));
+                                    QString::fromStdString(arm.lastError()));
 
               return;
           }
 
-          QTimer::singleShot(
-            200,
-            [&]() {
-                if (!motor_control.enable(serial))
-                {
-                    QMessageBox::critical(&window,
-                                          QStringLiteral("Enable error"),
-                                          QString::fromStdString(motor_control.lastError()));
-
-                    return;
-                }
-
-                motors_enabled = true;
-                send_timer.start();
-            });
+          motors_enabled = true;
+          send_timer.start();
       });
 
     QObject::connect(
@@ -316,7 +254,7 @@ int main(int argc, char* argv[])
           {
               QTimer::singleShot(
                 attempt * 50,
-                [&]() { motor_control.disable(serial); });
+                [&]() { arm.disable(); });
           }
       });
 
@@ -337,11 +275,11 @@ int main(int argc, char* argv[])
               return;
           }
 
-          if (!motor_control.setZero(serial))
+          if (!arm.setZero())
           {
               QMessageBox::critical(&window,
                                     QStringLiteral("Set Zero error"),
-                                    QString::fromStdString(motor_control.lastError()));
+                                    QString::fromStdString(arm.lastError()));
           }
       });
 
@@ -350,7 +288,7 @@ int main(int argc, char* argv[])
         {
             sliders[i]->setValue(0);
 
-            arm_command.motor_cmd()[i].q() = 0.0F;
+            target_positions[i] = 0.0F;
         }
     });
 
@@ -363,10 +301,9 @@ int main(int argc, char* argv[])
     feedback_timer.stop();
 
     for (int attempt = 0; attempt < 3; ++attempt)
-        motor_control.disable(serial);
+        arm.disable();
 
-    serial.stopReceiving();
-    serial.close();
+    arm.disconnect();
 
     return result;
 }
