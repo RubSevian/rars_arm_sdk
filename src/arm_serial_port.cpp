@@ -215,6 +215,7 @@ bool ArmSerialPort::startReceiving()
     if (receiving_.load())
         return true;
 
+    resetStatistics();
     receiving_.store(true);
 
     try
@@ -261,13 +262,20 @@ void ArmSerialPort::receiveLoop()
         Payload payload{};
 
         if (!validateFrame(frame, payload))
+        {
+            std::lock_guard<std::mutex> lock(received_mutex_);
+            ++statistics_.invalid_frames;
             continue;
+        }
 
         {
             std::lock_guard<std::mutex> lock(received_mutex_);
 
-            last_payload_		   = payload;
-            new_payload_available_ = true;
+			last_payload_		   = payload;
+			new_payload_available_ = true;
+            ++statistics_.valid_frames;
+            statistics_.feedback_received = true;
+            statistics_.last_valid_frame = std::chrono::steady_clock::now();
         }
     }
 }
@@ -313,12 +321,20 @@ bool ArmSerialPort::readFrame(Frame& frame)
     }
     catch (const LibSerial::ReadTimeout&)
     {
+        std::lock_guard<std::mutex> lock(received_mutex_);
+        ++statistics_.read_timeouts;
         return false;
     }
     catch (const std::exception& exception)
     {
         if (receiving_.load())
+        {
+            {
+                std::lock_guard<std::mutex> lock(received_mutex_);
+                ++statistics_.read_errors;
+            }
             setLastError(std::string("Ошибка чтения serial-порта: ") + exception.what());
+        }
 
         return false;
     }
@@ -352,6 +368,18 @@ bool ArmSerialPort::hasNewPayload() const
 {
     std::lock_guard<std::mutex> lock(received_mutex_);
     return new_payload_available_;
+}
+
+SerialStatistics ArmSerialPort::statistics() const
+{
+    std::lock_guard<std::mutex> lock(received_mutex_);
+    return statistics_;
+}
+
+void ArmSerialPort::resetStatistics()
+{
+    std::lock_guard<std::mutex> lock(received_mutex_);
+    statistics_ = {};
 }
 
 // ---------------------------------------------------------

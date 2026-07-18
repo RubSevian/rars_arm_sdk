@@ -56,9 +56,19 @@ if (arm.tryReadState(state)) {
     // A fresh feedback packet is available.
 }
 
+const auto status = arm.communicationStatus();
+// status.watchdog_tripped, feedback_age, valid_frames, invalid_frames, ...
+
 arm.disable();
 arm.disconnect();
 ```
 
 `setZero()` is rejected while the motors are enabled. Command values containing
 NaN or infinity are rejected before serialization.
+
+The command watchdog is armed by the first successfully transmitted motion
+command after `enable()`. This accounts for motors that produce no feedback
+while disabled. It then allows one second for the first feedback packet and
+requires feedback no older than 200 ms. It rejects new motion commands when it
+trips; it does not automatically move or disable the arm. Both intervals and
+the watchdog switch are available in `ArmConfiguration`.

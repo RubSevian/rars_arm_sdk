@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <libserial/SerialPort.h>
@@ -12,6 +13,16 @@
 
 namespace rars_arm
 {
+
+struct SerialStatistics
+{
+    std::uint64_t valid_frames = 0;
+    std::uint64_t invalid_frames = 0;
+    std::uint64_t read_timeouts = 0;
+    std::uint64_t read_errors = 0;
+    bool feedback_received = false;
+    std::chrono::steady_clock::time_point last_valid_frame{};
+};
 
 class ArmSerialPort
 {
@@ -139,6 +150,10 @@ public:
      */
     [[nodiscard]] bool hasNewPayload() const;
 
+    [[nodiscard]] SerialStatistics statistics() const;
+
+    void resetStatistics();
+
     /**
      * Текст последней ошибки.
      */
@@ -199,6 +214,8 @@ private:
 
     // true, когда получен новый корректный пакет.
     bool new_payload_available_ = false;
+
+    SerialStatistics statistics_{};
 
     // Последняя ошибка.
     mutable std::mutex error_mutex_;

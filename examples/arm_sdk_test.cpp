@@ -97,6 +97,9 @@ int main(int argc, char* argv[])
 
     auto* grid = new QGridLayout();
 
+    auto* communication_label = new QLabel(
+      QStringLiteral("feedback: waiting, valid: 0, invalid: 0, timeouts: 0"));
+
     std::array<QSlider*, rars_arm::kArmMotorCount> sliders{};
 
     std::array<QLabel*, rars_arm::kArmMotorCount> target_labels{};
@@ -154,6 +157,7 @@ int main(int argc, char* argv[])
     button_layout->addWidget(center_button);
 
     main_layout->addLayout(grid);
+    main_layout->addWidget(communication_label);
     main_layout->addLayout(button_layout);
 
     QTimer send_timer;
@@ -166,6 +170,26 @@ int main(int argc, char* argv[])
     bool motors_enabled = false;
 
     QObject::connect(&feedback_timer, &QTimer::timeout, [&]() {
+        const auto communication = arm.communicationStatus();
+        const QString feedback_age = communication.feedback_received
+                                     ? QString::number(communication.feedback_age.count()) + " ms"
+                                     : QStringLiteral("waiting");
+        const QString watchdog_state = !communication.watchdog_armed
+                                        ? QStringLiteral("idle")
+                                        : communication.watchdog_tripped
+                                            ? QStringLiteral("TRIPPED")
+                                            : communication.feedback_received
+                                                ? QStringLiteral("ok")
+                                                : QStringLiteral("waiting");
+        communication_label->setText(
+          QStringLiteral("feedback: %1, watchdog: %2, valid: %3, invalid: %4, timeouts: %5, read errors: %6")
+            .arg(feedback_age)
+            .arg(watchdog_state)
+            .arg(static_cast<qulonglong>(communication.valid_frames))
+            .arg(static_cast<qulonglong>(communication.invalid_frames))
+            .arg(static_cast<qulonglong>(communication.read_timeouts))
+            .arg(static_cast<qulonglong>(communication.read_errors)));
+
         if (!arm.tryReadState(arm_state))
             return;
 

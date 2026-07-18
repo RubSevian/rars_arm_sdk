@@ -56,6 +56,7 @@ bool RarsArm::connect()
     }
 
     enabled_ = false;
+    watchdog_armed_ = false;
     setLastError("");
     return true;
 }
@@ -72,6 +73,7 @@ void RarsArm::disconnect() noexcept
     }
 
     enabled_ = false;
+    watchdog_armed_ = false;
     serial_.close();
 }
 
@@ -116,7 +118,9 @@ bool RarsArm::enable()
         return false;
     }
 
+    serial_.resetStatistics();
     enabled_ = true;
+    watchdog_armed_ = false;
     setLastError("");
     return true;
 }
@@ -139,6 +143,7 @@ bool RarsArm::disable()
     }
 
     enabled_ = false;
+    watchdog_armed_ = false;
     setLastError("");
     return true;
 }
@@ -189,6 +194,14 @@ bool RarsArm::sendMit(const MotorValues& position,
         return false;
     }
 
+    const auto now = std::chrono::steady_clock::now();
+    const SerialStatistics serial_statistics = serial_.statistics();
+    if (watchdog_armed_ && watchdogTripped(serial_statistics, now))
+    {
+        setLastError("Cannot send a command: feedback watchdog timed out.");
+        return false;
+    }
+
     if (!allFinite(position) || !allFinite(velocity) || !allFinite(kp)
         || !allFinite(kd) || !allFinite(torque))
     {
@@ -219,6 +232,12 @@ bool RarsArm::sendMit(const MotorValues& position,
         return false;
     }
 
+    if (!watchdog_armed_)
+    {
+        watchdog_armed_ = true;
+        watchdog_armed_at_ = now;
+    }
+
     setLastError("");
     return true;
 }
@@ -246,6 +265,32 @@ bool RarsArm::tryReadState(ArmLowState& state)
     return motor_control_.read(serial_, state);
 }
 
+CommunicationStatus RarsArm::communicationStatus() const
+{
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+
+    const SerialStatistics serial_status = serial_.statistics();
+    CommunicationStatus status;
+    status.connected = serial_.isOpen() && serial_.isReceiving();
+    status.enabled = enabled_;
+    status.feedback_received = serial_status.feedback_received;
+    status.watchdog_armed = watchdog_armed_;
+    status.watchdog_tripped = status.connected && watchdog_armed_
+                              && watchdogTripped(serial_status, std::chrono::steady_clock::now());
+    status.valid_frames = serial_status.valid_frames;
+    status.invalid_frames = serial_status.invalid_frames;
+    status.read_timeouts = serial_status.read_timeouts;
+    status.read_errors = serial_status.read_errors;
+
+    if (serial_status.feedback_received)
+    {
+        status.feedback_age = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - serial_status.last_valid_frame);
+    }
+
+    return status;
+}
+
 const ArmConfiguration& RarsArm::configuration() const noexcept
 {
     return configuration_;
@@ -263,6 +308,18 @@ bool RarsArm::allFinite(const MotorValues& values) noexcept
         if (!std::isfinite(value))
             return false;
     return true;
+}
+
+bool RarsArm::watchdogTripped(const SerialStatistics& statistics,
+                              std::chrono::steady_clock::time_point now) const noexcept
+{
+    if (!configuration_.feedback_watchdog_enabled)
+        return false;
+
+    if (statistics.feedback_received)
+        return now - statistics.last_valid_frame > configuration_.feedback_timeout;
+
+    return now - watchdog_armed_at_ > configuration_.initial_feedback_grace;
 }
 
 void RarsArm::setLastError(std::string message)
