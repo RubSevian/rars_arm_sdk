@@ -66,6 +66,12 @@ arm.disconnect();
 `setZero()` is rejected while the motors are enabled. Command values containing
 NaN or infinity are rejected before serialization.
 
+The SDK always stores seven entries: indices `0..5` are the six arm joints and
+index `6` (`kGripperMotorIndex`) is the gripper motor. `MotorConfiguration`
+defines its motor type, direction, zero offset and limits in joint coordinates.
+Commands and `JointState` use joint coordinates; conversion to and from raw
+motor coordinates is internal.
+
 The command watchdog is armed by the first successfully transmitted motion
 command after `enable()`. This accounts for motors that produce no feedback
 while disabled. It then allows one second for the first feedback packet and

@@ -6,8 +6,9 @@
 namespace rars_arm
 {
 
-inline constexpr std::size_t kArmMotorCount =
-  7; // глобальная константа заголовочного файла (считается при компиляции )
+inline constexpr std::size_t kArmJointCount = 6;
+inline constexpr std::size_t kGripperMotorIndex = 6;
+inline constexpr std::size_t kArmMotorCount = kArmJointCount + 1;
 
 enum class ArmMotorType : std::uint8_t
 {

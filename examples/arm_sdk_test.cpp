@@ -11,7 +11,6 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <array>
-#include <cmath>
 #include <cstddef>
 
 namespace
@@ -23,11 +22,13 @@ constexpr int kSliderMaximum = 10000;
 constexpr int kSendPeriodMs		= 5;  // 200 Гц
 constexpr int kFeedbackPeriodMs = 30; // около 33 Гц
 
-constexpr float kPi = 3.14159265358979323846F;
-
-float sliderToRadians(int value)
+float sliderToPosition(int value, const rars_arm::MotorConfiguration& motor)
 {
-    return static_cast<float>(value) * (2.0F * kPi) / static_cast<float>(kSliderMaximum);
+    if (value >= 0)
+        return static_cast<float>(value) * motor.joint_position_max
+               / static_cast<float>(kSliderMaximum);
+    return static_cast<float>(-value) * motor.joint_position_min
+           / static_cast<float>(kSliderMaximum);
 }
 
 void addMotorRow(QGridLayout*	grid,
@@ -79,7 +80,7 @@ int main(int argc, char* argv[])
 
     rars_arm::RarsArm arm;
     rars_arm::RarsArm::MotorValues target_positions{};
-    rars_arm::ArmLowState arm_state;
+    rars_arm::JointState arm_state;
 
     if (!arm.connect())
     {
@@ -116,11 +117,17 @@ int main(int argc, char* argv[])
 
     for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
     {
-        const QString motor_type = i < 3 ? QStringLiteral("DM4340") : QStringLiteral("DM4310");
+        const QString motor_type = arm.configuration().motors[i].type
+                                           == rars_arm::ArmMotorType::DM4340
+                                     ? QStringLiteral("DM4340")
+                                     : QStringLiteral("DM4310");
+        const QString motor_name = i == rars_arm::kGripperMotorIndex
+                                   ? QStringLiteral("Gripper M%1 %2").arg(i + 1).arg(motor_type)
+                                   : QStringLiteral("Joint %1 M%1 %2").arg(i + 1).arg(motor_type);
 
         addMotorRow(grid,
                     static_cast<int>(i),
-                    QStringLiteral("M%1 %2").arg(i + 1).arg(motor_type),
+                    motor_name,
                     sliders[i],
                     target_labels[i],
                     current_labels[i],
@@ -131,8 +138,9 @@ int main(int argc, char* argv[])
 
         QObject::connect(sliders[i],
                          &QSlider::valueChanged,
-                         [&target_positions, &target_labels, i](int value) {
-                             const float position = sliderToRadians(value);
+                         [&arm, &target_positions, &target_labels, i](int value) {
+                             const float position = sliderToPosition(
+                               value, arm.configuration().motors[i]);
 
                              target_positions[i] = position;
 
@@ -190,16 +198,14 @@ int main(int argc, char* argv[])
             .arg(static_cast<qulonglong>(communication.read_timeouts))
             .arg(static_cast<qulonglong>(communication.read_errors)));
 
-        if (!arm.tryReadState(arm_state))
+        if (!arm.tryReadJointState(arm_state))
             return;
 
         for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
         {
-            const auto& state = arm_state.motor_state()[i];
-
             const float target = target_positions[i];
 
-            const float current = state.q();
+            const float current = arm_state.position[i];
 
             const float position_error = target - current;
 
@@ -207,13 +213,14 @@ int main(int argc, char* argv[])
 
             error_labels[i]->setText(QStringLiteral("err: %1 rad").arg(position_error, 0, 'f', 3));
 
-            torque_labels[i]->setText(QStringLiteral("tau: %1 Nm").arg(state.tau(), 0, 'f', 3));
+            torque_labels[i]->setText(
+              QStringLiteral("tau: %1 Nm").arg(arm_state.torque[i], 0, 'f', 3));
 
             mos_temperature_labels[i]->setText(
-              QStringLiteral("MOS: %1 C").arg(state.mos_temperature(), 0, 'f', 0));
+              QStringLiteral("MOS: %1 C").arg(arm_state.mos_temperature[i], 0, 'f', 0));
 
             rotor_temperature_labels[i]->setText(
-              QStringLiteral("Rotor: %1 C").arg(state.rotor_temperature(), 0, 'f', 0));
+              QStringLiteral("Rotor: %1 C").arg(arm_state.rotor_temperature[i], 0, 'f', 0));
         }
     });
 
@@ -251,7 +258,8 @@ int main(int argc, char* argv[])
 
           for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
           {
-              target_positions[i] = sliderToRadians(sliders[i]->value());
+              target_positions[i] = sliderToPosition(
+                sliders[i]->value(), arm.configuration().motors[i]);
           }
 
           if (!arm.enable())

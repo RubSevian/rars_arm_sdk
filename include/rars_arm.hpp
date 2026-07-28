@@ -13,6 +13,15 @@
 namespace rars_arm
 {
 
+struct MotorConfiguration
+{
+    ArmMotorType type = ArmMotorType::Unknown;
+    float direction = 1.0F;
+    float zero_offset = 0.0F;
+    float joint_position_min = -1.5F;
+    float joint_position_max = 1.5F;
+};
+
 struct ArmConfiguration
 {
     std::string port_name = "/dev/ttyACM0";
@@ -23,9 +32,32 @@ struct ArmConfiguration
     std::array<float, kArmMotorCount> default_kd{
       1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
 
+    // Entries 0..5 are arm joints; entry 6 is the gripper motor.
+    std::array<MotorConfiguration, kArmMotorCount> motors{{
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.3F, 1.5F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F},
+    }};
+
     bool feedback_watchdog_enabled = true;
     std::chrono::milliseconds feedback_timeout{200};
     std::chrono::milliseconds initial_feedback_grace{1000};
+};
+
+struct JointState
+{
+    std::array<float, kArmMotorCount> position{};
+    std::array<float, kArmMotorCount> velocity{};
+    std::array<float, kArmMotorCount> torque{};
+    std::array<float, kArmMotorCount> mos_temperature{};
+    std::array<float, kArmMotorCount> rotor_temperature{};
+    std::array<std::uint8_t, kArmMotorCount> error{};
+    std::array<std::uint8_t, kArmMotorCount> motor_id{};
+    std::array<bool, kArmMotorCount> valid{};
 };
 
 struct CommunicationStatus
@@ -79,13 +111,21 @@ public:
     // previous call. The supplied state is left unchanged otherwise.
     bool tryReadState(ArmLowState& state);
 
+    // Feedback transformed to joint coordinates. Index 6 is the gripper.
+    bool tryReadJointState(JointState& state);
+
     [[nodiscard]] CommunicationStatus communicationStatus() const;
 
     [[nodiscard]] const ArmConfiguration& configuration() const noexcept;
     [[nodiscard]] std::string lastError() const;
 
 private:
+    static void validateConfiguration(const ArmConfiguration& configuration);
+    [[nodiscard]] static std::array<ArmMotorType, kArmMotorCount> motorTypes(
+      const ArmConfiguration& configuration) noexcept;
     [[nodiscard]] static bool allFinite(const MotorValues& values) noexcept;
+    [[nodiscard]] bool positionsWithinLimits(const MotorValues& position,
+                                             std::size_t& invalid_index) const noexcept;
     [[nodiscard]] bool watchdogTripped(const SerialStatistics& statistics,
                                        std::chrono::steady_clock::time_point now) const noexcept;
     void setLastError(std::string message);

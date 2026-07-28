@@ -3,11 +3,22 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace rars_arm
 {
 
 ArmMotorControl::ArmMotorControl()
+    : ArmMotorControl({ArmMotorType::DM4340,
+                       ArmMotorType::DM4340,
+                       ArmMotorType::DM4340,
+                       ArmMotorType::DM4310,
+                       ArmMotorType::DM4310,
+                       ArmMotorType::DM4310,
+                       ArmMotorType::DM4310})
+{}
+
+ArmMotorControl::ArmMotorControl(std::array<ArmMotorType, kArmMotorCount> motor_types)
     : dm4310_protocol_{
           -12.5F,
           12.5F,
@@ -40,16 +51,7 @@ ArmMotorControl::ArmMotorControl()
           {-1.57F, 1.57F, -4.57F, 4.57F, -5.0F, 5.0F},
           {-1.57F, 1.57F, -4.57F, 4.57F, -5.0F, 5.0F}
       }},
-      configured_motor_types_{{
-          ArmMotorType::DM4340,
-          ArmMotorType::DM4340,
-          ArmMotorType::DM4340,
-
-          ArmMotorType::DM4310,
-          ArmMotorType::DM4310,
-          ArmMotorType::DM4310,
-          ArmMotorType::DM4310
-      }},
+      configured_motor_types_(std::move(motor_types)),
       last_command_motor_types_(configured_motor_types_)
 {}
 

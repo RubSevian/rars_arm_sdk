@@ -2,30 +2,20 @@
 
 #include <cmath>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
 namespace rars_arm
 {
 
-namespace
-{
-
-constexpr std::array<ArmMotorType, kArmMotorCount> kMotorTypes{
-  ArmMotorType::DM4340,
-  ArmMotorType::DM4340,
-  ArmMotorType::DM4340,
-  ArmMotorType::DM4310,
-  ArmMotorType::DM4310,
-  ArmMotorType::DM4310,
-  ArmMotorType::DM4310};
-
-} // namespace
-
 RarsArm::RarsArm(ArmConfiguration configuration)
     : configuration_(std::move(configuration)),
-      serial_(configuration_.port_name, configuration_.baud_rate)
-{}
+      serial_(configuration_.port_name, configuration_.baud_rate),
+      motor_control_(motorTypes(configuration_))
+{
+    validateConfiguration(configuration_);
+}
 
 RarsArm::~RarsArm()
 {
@@ -209,17 +199,27 @@ bool RarsArm::sendMit(const MotorValues& position,
         return false;
     }
 
+    std::size_t invalid_index = 0;
+    if (!positionsWithinLimits(position, invalid_index))
+    {
+        setLastError("Joint position " + std::to_string(invalid_index)
+                     + " is outside configured limits.");
+        return false;
+    }
+
     ArmLowCmd command;
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
         auto& motor = command.motor_cmd()[i];
-        motor.motor_type() = kMotorTypes[i];
+        const auto& motor_configuration = configuration_.motors[i];
+        motor.motor_type() = motor_configuration.type;
         motor.mode() = ArmControlMode::MIT;
-        motor.q() = position[i];
-        motor.dq() = velocity[i];
+        motor.q() = motor_configuration.direction * position[i]
+                    + motor_configuration.zero_offset;
+        motor.dq() = motor_configuration.direction * velocity[i];
         motor.kp() = kp[i];
         motor.kd() = kd[i];
-        motor.tau() = torque[i];
+        motor.tau() = motor_configuration.direction * torque[i];
     }
 
     if (!motor_control_.write(serial_, command))
@@ -265,6 +265,30 @@ bool RarsArm::tryReadState(ArmLowState& state)
     return motor_control_.read(serial_, state);
 }
 
+bool RarsArm::tryReadJointState(JointState& state)
+{
+    ArmLowState raw_state;
+    if (!tryReadState(raw_state))
+        return false;
+
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+    {
+        const auto& raw_motor = raw_state.motor_state()[i];
+        const auto& motor_configuration = configuration_.motors[i];
+        state.position[i] = motor_configuration.direction
+                            * (raw_motor.q() - motor_configuration.zero_offset);
+        state.velocity[i] = motor_configuration.direction * raw_motor.dq();
+        state.torque[i] = motor_configuration.direction * raw_motor.tau();
+        state.mos_temperature[i] = raw_motor.mos_temperature();
+        state.rotor_temperature[i] = raw_motor.rotor_temperature();
+        state.error[i] = raw_motor.error();
+        state.motor_id[i] = raw_motor.motor_id();
+        state.valid[i] = raw_motor.valid();
+    }
+
+    return true;
+}
+
 CommunicationStatus RarsArm::communicationStatus() const
 {
     std::lock_guard<std::mutex> lock(operation_mutex_);
@@ -307,6 +331,49 @@ bool RarsArm::allFinite(const MotorValues& values) noexcept
     for (const float value : values)
         if (!std::isfinite(value))
             return false;
+    return true;
+}
+
+void RarsArm::validateConfiguration(const ArmConfiguration& configuration)
+{
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+    {
+        const auto& motor = configuration.motors[i];
+        if (motor.type == ArmMotorType::Unknown)
+            throw std::invalid_argument("Motor type is not configured at index "
+                                        + std::to_string(i) + ".");
+        if (motor.direction != 1.0F && motor.direction != -1.0F)
+            throw std::invalid_argument("Motor direction must be +1 or -1 at index "
+                                        + std::to_string(i) + ".");
+        if (!std::isfinite(motor.zero_offset) || !std::isfinite(motor.joint_position_min)
+            || !std::isfinite(motor.joint_position_max)
+            || motor.joint_position_min >= motor.joint_position_max)
+            throw std::invalid_argument("Invalid motor limits or offset at index "
+                                        + std::to_string(i) + ".");
+    }
+}
+
+std::array<ArmMotorType, kArmMotorCount> RarsArm::motorTypes(
+  const ArmConfiguration& configuration) noexcept
+{
+    std::array<ArmMotorType, kArmMotorCount> result{};
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+        result[i] = configuration.motors[i].type;
+    return result;
+}
+
+bool RarsArm::positionsWithinLimits(const MotorValues& position,
+                                    std::size_t& invalid_index) const noexcept
+{
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+    {
+        if (position[i] < configuration_.motors[i].joint_position_min
+            || position[i] > configuration_.motors[i].joint_position_max)
+        {
+            invalid_index = i;
+            return false;
+        }
+    }
     return true;
 }
 

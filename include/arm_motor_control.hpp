@@ -17,6 +17,7 @@ class ArmMotorControl
 public:
 
     ArmMotorControl();
+    explicit ArmMotorControl(std::array<ArmMotorType, kArmMotorCount> motor_types);
 
     bool enable(ArmSerialPort& serial);
 
