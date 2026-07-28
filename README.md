@@ -30,6 +30,32 @@ cmake -S . -B build -DRARS_ARM_BUILD_QT_EXAMPLE=OFF
 cmake --build build
 ```
 
+## Build the Python module
+
+```bash
+cmake -S . -B build-python \
+  -DRARS_ARM_BUILD_QT_EXAMPLE=OFF \
+  -DRARS_ARM_BUILD_PYTHON=ON \
+  -DPython3_EXECUTABLE=/usr/bin/python3
+cmake --build build-python
+PYTHONPATH=build-python python3 -c "import rars_arm_py; print(rars_arm_py.MOTOR_COUNT)"
+```
+
+Minimal Python setup:
+
+```python
+import rars_arm_py as sdk
+
+config = sdk.ArmConfiguration()
+config.port_name = "/dev/ttyACM0"
+config.motor(1).direction = -1.0
+config.motor(1).zero_offset = 0.4
+
+arm = sdk.RarsArm(config)
+if not arm.connect():
+    raise RuntimeError(arm.last_error)
+```
+
 Other CMake projects can link the build-tree target as `rars_arm::sdk`. After
 installation, use `find_package(rars_arm_sdk CONFIG REQUIRED)` and link the same
 target.
@@ -68,9 +94,14 @@ NaN or infinity are rejected before serialization.
 
 The SDK always stores seven entries: indices `0..5` are the six arm joints and
 index `6` (`kGripperMotorIndex`) is the gripper motor. `MotorConfiguration`
-defines its motor type, direction, zero offset and limits in joint coordinates.
+defines its motor type, direction, zero offset, position limits, maximum velocity
+and maximum torque in joint coordinates.
 Commands and `JointState` use joint coordinates; conversion to and from raw
 motor coordinates is internal.
+
+Mechanical working limits are checked by `RarsArm`. `ArmMotorControl` only
+checks whether values fit the selected DM4310/DM4340 MIT protocol. Independent
+hard safety limits and the communication watchdog must remain on the STM32.
 
 The command watchdog is armed by the first successfully transmitted motion
 command after `enable()`. This accounts for motors that produce no feedback

@@ -20,6 +20,8 @@ struct MotorConfiguration
     float zero_offset = 0.0F;
     float joint_position_min = -1.5F;
     float joint_position_max = 1.5F;
+    float joint_velocity_max = 2.57F;
+    float joint_torque_max = 5.0F;
 };
 
 struct ArmConfiguration
@@ -34,13 +36,13 @@ struct ArmConfiguration
 
     // Entries 0..5 are arm joints; entry 6 is the gripper motor.
     std::array<MotorConfiguration, kArmMotorCount> motors{{
-      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F},
-      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.3F, 1.5F},
-      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F, 2.57F, 15.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.3F, 1.5F, 2.57F, 15.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F, 2.57F, 15.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F, 4.57F, 7.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F, 4.57F, 7.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 5.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 5.0F},
     }};
 
     bool feedback_watchdog_enabled = true;

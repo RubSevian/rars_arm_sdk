@@ -51,22 +51,9 @@ private:
         float torque_max;
     };
 
-    struct MotorSafetyLimits
-    {
-        float position_min;
-        float position_max;
-
-        float velocity_min;
-        float velocity_max;
-
-        float torque_min;
-        float torque_max;
-    };
-
 private:
 
-    [[nodiscard]] std::array<std::uint8_t, 8> packMitCommand(const ArmMotorCmd& command,
-                                                             std::size_t		motor_index);
+    [[nodiscard]] std::array<std::uint8_t, 8> packMitCommand(const ArmMotorCmd& command);
 
     [[nodiscard]] std::array<std::uint8_t, 8> makeSpecialCommand(std::uint8_t special_byte) const;
 
@@ -78,6 +65,7 @@ private:
     [[nodiscard]] const MotorProtocolLimits& protocolLimits(ArmMotorType motor_type) const;
 
     bool validateMotorType(std::size_t motor_index, ArmMotorType motor_type);
+    bool validateProtocolLimits(const ArmMotorCmd& command, std::size_t motor_index);
 
     static std::uint32_t floatToUint(float		  value,
                                      float		  value_min,
@@ -99,8 +87,6 @@ private:
 
     const MotorProtocolLimits dm4310_protocol_;
     const MotorProtocolLimits dm4340_protocol_;
-
-    std::array<MotorSafetyLimits, kArmMotorCount> safety_limits_;
 
     std::array<ArmMotorType, kArmMotorCount> configured_motor_types_;
 

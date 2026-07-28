@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 project(rars_arm_sdk VERSION 0.1.0 LANGUAGES CXX)
 
 option(RARS_ARM_BUILD_QT_EXAMPLE "Build the Qt hardware test application" ON)
+option(RARS_ARM_BUILD_PYTHON "Build the pybind11 Python module" OFF)
 option(RARS_ARM_BUILD_TESTING "Build SDK unit tests" OFF)
 
 include(GNUInstallDirs)
@@ -43,6 +44,7 @@ set_target_properties(rars_arm_sdk PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
     EXPORT_NAME sdk
+    POSITION_INDEPENDENT_CODE ON
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -61,6 +63,23 @@ if(RARS_ARM_BUILD_QT_EXAMPLE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(rars_arm_qt_test PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+endif()
+
+if(RARS_ARM_BUILD_PYTHON)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+    find_package(pybind11 CONFIG REQUIRED)
+
+    pybind11_add_module(rars_arm_py python/bindings.cpp)
+    target_link_libraries(rars_arm_py PRIVATE rars_arm::sdk)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(rars_arm_py PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    install(
+        TARGETS rars_arm_py
+        LIBRARY DESTINATION
+            ${CMAKE_INSTALL_LIBDIR}/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages
+    )
 endif()
 
 if(RARS_ARM_BUILD_TESTING)

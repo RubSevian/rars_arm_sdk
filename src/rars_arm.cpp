@@ -207,6 +207,22 @@ bool RarsArm::sendMit(const MotorValues& position,
         return false;
     }
 
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+    {
+        if (std::abs(velocity[i]) > configuration_.motors[i].joint_velocity_max)
+        {
+            setLastError("Joint velocity " + std::to_string(i)
+                         + " is outside configured limits.");
+            return false;
+        }
+        if (std::abs(torque[i]) > configuration_.motors[i].joint_torque_max)
+        {
+            setLastError("Joint torque " + std::to_string(i)
+                         + " is outside configured limits.");
+            return false;
+        }
+    }
+
     ArmLowCmd command;
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
@@ -347,7 +363,10 @@ void RarsArm::validateConfiguration(const ArmConfiguration& configuration)
                                         + std::to_string(i) + ".");
         if (!std::isfinite(motor.zero_offset) || !std::isfinite(motor.joint_position_min)
             || !std::isfinite(motor.joint_position_max)
-            || motor.joint_position_min >= motor.joint_position_max)
+            || !std::isfinite(motor.joint_velocity_max)
+            || !std::isfinite(motor.joint_torque_max)
+            || motor.joint_position_min >= motor.joint_position_max
+            || motor.joint_velocity_max <= 0.0F || motor.joint_torque_max <= 0.0F)
             throw std::invalid_argument("Invalid motor limits or offset at index "
                                         + std::to_string(i) + ".");
     }

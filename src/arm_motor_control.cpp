@@ -41,16 +41,6 @@ ArmMotorControl::ArmMotorControl(std::array<ArmMotorType, kArmMotorCount> motor_
           5.0F,
           -28.0F,
           28.0F},
-      safety_limits_{{
-          {-1.5F, 1.5F, -2.57F, 2.57F, -15.0F, 15.0F},
-          {-1.3F, 1.5F, -2.57F, 2.57F, -15.0F, 15.0F},
-          {-1.5F, 1.5F, -2.57F, 2.57F, -15.0F, 15.0F},
-
-          {-1.5F, 1.5F, -4.57F, 4.57F, -7.0F, 7.0F},
-          {-1.5F, 1.5F, -4.57F, 4.57F, -7.0F, 7.0F},
-          {-1.57F, 1.57F, -4.57F, 4.57F, -5.0F, 5.0F},
-          {-1.57F, 1.57F, -4.57F, 4.57F, -5.0F, 5.0F}
-      }},
       configured_motor_types_(std::move(motor_types)),
       last_command_motor_types_(configured_motor_types_)
 {}
@@ -119,7 +109,10 @@ bool ArmMotorControl::write(ArmSerialPort& serial, const ArmLowCmd& low_cmd)
         if (!validateMotorType(i, command.motor_type()))
             return false;
 
-        const auto frame = packMitCommand(command, i);
+        if (!validateProtocolLimits(command, i))
+            return false;
+
+        const auto frame = packMitCommand(command);
 
         std::copy(frame.begin(), frame.end(), payload.begin() + static_cast<std::ptrdiff_t>(i * 8));
 
@@ -146,22 +139,15 @@ bool ArmMotorControl::read(ArmSerialPort& serial, ArmLowState& low_state)
     return true;
 }
 
-std::array<std::uint8_t, 8> ArmMotorControl::packMitCommand(const ArmMotorCmd& command,
-                                                            std::size_t		   motor_index)
+std::array<std::uint8_t, 8> ArmMotorControl::packMitCommand(const ArmMotorCmd& command)
 {
     const auto& protocol = protocolLimits(command.motor_type());
 
-    const auto& safety = safety_limits_[motor_index];
-
-    const float q = std::clamp(command.q(), safety.position_min, safety.position_max);
-
-    const float dq = std::clamp(command.dq(), safety.velocity_min, safety.velocity_max);
-
-    const float kp = std::clamp(command.kp(), protocol.kp_min, protocol.kp_max);
-
-    const float kd = std::clamp(command.kd(), protocol.kd_min, protocol.kd_max);
-
-    const float tau = std::clamp(command.tau(), safety.torque_min, safety.torque_max);
+    const float q = command.q();
+    const float dq = command.dq();
+    const float kp = command.kp();
+    const float kd = command.kd();
+    const float tau = command.tau();
 
     const std::uint32_t q_int = floatToUint(q, protocol.position_min, protocol.position_max, 16);
 
@@ -244,10 +230,6 @@ bool ArmMotorControl::decodeMotorFeedback(const ArmSerialPort::Payload& payload,
     state.valid_ = state.motor_id_ == expected_id;
 
     return state.valid_;
-
-    // state.valid_ = true;
-
-    return true;
 }
 
 const ArmMotorControl::MotorProtocolLimits& ArmMotorControl::protocolLimits(
@@ -285,6 +267,51 @@ bool ArmMotorControl::validateMotorType(std::size_t motor_index, ArmMotorType mo
     if (motor_type != configured_motor_types_[motor_index])
     {
         setLastError("Тип двигателя не совпадает с конфигурацией руки.");
+        return false;
+    }
+
+    return true;
+}
+
+bool ArmMotorControl::validateProtocolLimits(const ArmMotorCmd& command,
+                                             std::size_t motor_index)
+{
+    if (motor_index >= kArmMotorCount)
+    {
+        setLastError("Invalid motor index.");
+        return false;
+    }
+
+    const auto& protocol = protocolLimits(command.motor_type());
+    const std::string prefix = "Motor " + std::to_string(motor_index + 1U) + ": ";
+
+    const auto in_range = [](float value, float minimum, float maximum) {
+        return std::isfinite(value) && value >= minimum && value <= maximum;
+    };
+
+    if (!in_range(command.q(), protocol.position_min, protocol.position_max))
+    {
+        setLastError(prefix + "position is outside protocol limits.");
+        return false;
+    }
+    if (!in_range(command.dq(), protocol.velocity_min, protocol.velocity_max))
+    {
+        setLastError(prefix + "velocity is outside protocol limits.");
+        return false;
+    }
+    if (!in_range(command.tau(), protocol.torque_min, protocol.torque_max))
+    {
+        setLastError(prefix + "torque is outside protocol limits.");
+        return false;
+    }
+    if (!in_range(command.kp(), protocol.kp_min, protocol.kp_max))
+    {
+        setLastError(prefix + "kp is outside protocol limits.");
+        return false;
+    }
+    if (!in_range(command.kd(), protocol.kd_min, protocol.kd_max))
+    {
+        setLastError(prefix + "kd is outside protocol limits.");
         return false;
     }
 
