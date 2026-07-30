@@ -36,13 +36,13 @@ struct ArmConfiguration
 
     // Entries 0..5 are arm joints; entry 6 is the gripper motor.
     std::array<MotorConfiguration, kArmMotorCount> motors{{
-      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F, 2.57F, 15.0F},
-      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.3F, 1.5F, 2.57F, 15.0F},
-      {ArmMotorType::DM4340, 1.0F, 0.0F, -1.5F, 1.5F, 2.57F, 15.0F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F, 4.57F, 7.0F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.5F, 1.5F, 4.57F, 7.0F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 5.0F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 5.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, -2.8F, 2.8F, 2.57F, 15.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.14F, 2.57F, 15.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.14F, 2.57F, 15.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.4F, 1.4F, 4.57F, 7.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 7.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -2.0F, 2.0F, 4.57F, 5.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, 0.0F, 1.4F, 4.57F, 5.0F},
     }};
 
     bool feedback_watchdog_enabled = true;
@@ -57,6 +57,8 @@ struct JointState
     std::array<float, kArmMotorCount> torque{};
     std::array<float, kArmMotorCount> mos_temperature{};
     std::array<float, kArmMotorCount> rotor_temperature{};
+    // DAMIAO status nibble: 0=disabled, 1=enabled/normal, 8..14=fault.
+    // The field keeps its historical name for API compatibility.
     std::array<std::uint8_t, kArmMotorCount> error{};
     std::array<std::uint8_t, kArmMotorCount> motor_id{};
     std::array<bool, kArmMotorCount> valid{};

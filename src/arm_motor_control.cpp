@@ -1,4 +1,4 @@
-#include "include/arm_motor_control.hpp"
+#include "arm_motor_control.hpp"
 
 #include <algorithm>
 #include <cmath>

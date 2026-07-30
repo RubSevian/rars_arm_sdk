@@ -1,4 +1,4 @@
-#include "include/arm_serial_port.hpp"
+#include "arm_serial_port.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -380,6 +380,8 @@ void ArmSerialPort::resetStatistics()
 {
     std::lock_guard<std::mutex> lock(received_mutex_);
     statistics_ = {};
+    last_payload_ = {};
+    new_payload_available_ = false;
 }
 
 // ---------------------------------------------------------

@@ -1,5 +1,6 @@
-#include "include/rars_arm.hpp"
+#include "rars_arm.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <stdexcept>
@@ -92,6 +93,10 @@ bool RarsArm::enable()
     if (enabled_)
         return true;
 
+    // Drop feedback received while the motors were disabled. Do this before
+    // sending enable so that the first enabled-state replies are preserved.
+    serial_.resetStatistics();
+
     if (!motor_control_.enable(serial_))
     {
         copySerialError("Failed to send enable command");
@@ -108,7 +113,6 @@ bool RarsArm::enable()
         return false;
     }
 
-    serial_.resetStatistics();
     enabled_ = true;
     watchdog_armed_ = false;
     setLastError("");
@@ -202,8 +206,12 @@ bool RarsArm::sendMit(const MotorValues& position,
     std::size_t invalid_index = 0;
     if (!positionsWithinLimits(position, invalid_index))
     {
-        setLastError("Joint position " + std::to_string(invalid_index)
-                     + " is outside configured limits.");
+        const auto& motor = configuration_.motors[invalid_index];
+        setLastError("Motor " + std::to_string(invalid_index + 1U)
+                     + " joint position " + std::to_string(position[invalid_index])
+                     + " is outside configured limits ["
+                     + std::to_string(motor.joint_position_min) + ", "
+                     + std::to_string(motor.joint_position_max) + "].");
         return false;
     }
 
@@ -211,14 +219,24 @@ bool RarsArm::sendMit(const MotorValues& position,
     {
         if (std::abs(velocity[i]) > configuration_.motors[i].joint_velocity_max)
         {
-            setLastError("Joint velocity " + std::to_string(i)
-                         + " is outside configured limits.");
+            setLastError("Motor " + std::to_string(i + 1U)
+                         + " joint velocity " + std::to_string(velocity[i])
+                         + " is outside configured limits ["
+                         + std::to_string(-configuration_.motors[i].joint_velocity_max)
+                         + ", "
+                         + std::to_string(configuration_.motors[i].joint_velocity_max)
+                         + "].");
             return false;
         }
         if (std::abs(torque[i]) > configuration_.motors[i].joint_torque_max)
         {
-            setLastError("Joint torque " + std::to_string(i)
-                         + " is outside configured limits.");
+            setLastError("Motor " + std::to_string(i + 1U)
+                         + " joint torque " + std::to_string(torque[i])
+                         + " is outside configured limits ["
+                         + std::to_string(-configuration_.motors[i].joint_torque_max)
+                         + ", "
+                         + std::to_string(configuration_.motors[i].joint_torque_max)
+                         + "].");
             return false;
         }
     }
@@ -352,6 +370,14 @@ bool RarsArm::allFinite(const MotorValues& values) noexcept
 
 void RarsArm::validateConfiguration(const ArmConfiguration& configuration)
 {
+    if (configuration.port_name.empty())
+        throw std::invalid_argument("Serial port name must not be empty.");
+    if (configuration.baud_rate == 0U)
+        throw std::invalid_argument("Baud rate must be greater than zero.");
+    if (configuration.feedback_timeout.count() <= 0
+        || configuration.initial_feedback_grace.count() <= 0)
+        throw std::invalid_argument("Feedback watchdog timeouts must be greater than zero.");
+
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
         const auto& motor = configuration.motors[i];
@@ -369,6 +395,37 @@ void RarsArm::validateConfiguration(const ArmConfiguration& configuration)
             || motor.joint_velocity_max <= 0.0F || motor.joint_torque_max <= 0.0F)
             throw std::invalid_argument("Invalid motor limits or offset at index "
                                         + std::to_string(i) + ".");
+
+        if (!std::isfinite(configuration.default_kp[i])
+            || configuration.default_kp[i] < 0.0F
+            || configuration.default_kp[i] > 500.0F)
+            throw std::invalid_argument("KP must be in [0, 500] at index "
+                                        + std::to_string(i) + ".");
+        if (!std::isfinite(configuration.default_kd[i])
+            || configuration.default_kd[i] < 0.0F
+            || configuration.default_kd[i] > 5.0F)
+            throw std::invalid_argument("KD must be in [0, 5] at index "
+                                        + std::to_string(i) + ".");
+
+        const float protocol_velocity_max =
+          motor.type == ArmMotorType::DM4340 ? 10.0F : 30.0F;
+        const float protocol_torque_max =
+          motor.type == ArmMotorType::DM4340 ? 28.0F : 10.0F;
+        if (motor.joint_velocity_max > protocol_velocity_max
+            || motor.joint_torque_max > protocol_torque_max)
+            throw std::invalid_argument(
+              "Joint velocity or torque limit exceeds the motor protocol at index "
+              + std::to_string(i) + ".");
+
+        const float raw_at_min =
+          motor.direction * motor.joint_position_min + motor.zero_offset;
+        const float raw_at_max =
+          motor.direction * motor.joint_position_max + motor.zero_offset;
+        if (std::min(raw_at_min, raw_at_max) < -12.5F
+            || std::max(raw_at_min, raw_at_max) > 12.5F)
+            throw std::invalid_argument(
+              "Joint position limits and zero offset exceed the motor protocol at index "
+              + std::to_string(i) + ".");
     }
 }
 
@@ -384,10 +441,18 @@ std::array<ArmMotorType, kArmMotorCount> RarsArm::motorTypes(
 bool RarsArm::positionsWithinLimits(const MotorValues& position,
                                     std::size_t& invalid_index) const noexcept
 {
+    // MIT position feedback is quantized to 16 bits. Around exact boundaries
+    // (notably a zero lower limit), decoding can differ by about 0.0002 rad.
+    // This tolerance only absorbs representation error; it does not replace
+    // the configured mechanical limits.
+    constexpr float position_limit_tolerance = 1.0e-3F;
+
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
-        if (position[i] < configuration_.motors[i].joint_position_min
-            || position[i] > configuration_.motors[i].joint_position_max)
+        if (position[i] <
+              configuration_.motors[i].joint_position_min - position_limit_tolerance
+            || position[i] >
+              configuration_.motors[i].joint_position_max + position_limit_tolerance)
         {
             invalid_index = i;
             return false;

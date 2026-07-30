@@ -29,7 +29,6 @@ add_library(rars_arm::sdk ALIAS rars_arm_sdk)
 target_compile_features(rars_arm_sdk PUBLIC cxx_std_17)
 target_include_directories(rars_arm_sdk
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PUBLIC
@@ -97,7 +96,7 @@ install(
 )
 install(
     DIRECTORY include/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/rars_arm
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.hpp"
 )
 install(
@@ -105,6 +104,11 @@ install(
     FILE rars_arm_sdkTargets.cmake
     NAMESPACE rars_arm::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/rars_arm_sdk
+)
+export(
+    EXPORT rars_arm_sdkTargets
+    FILE ${CMAKE_CURRENT_BINARY_DIR}/rars_arm_sdkTargets.cmake
+    NAMESPACE rars_arm::
 )
 
 include(CMakePackageConfigHelpers)

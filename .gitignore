@@ -1,2 +1,9 @@
-build
-cmake
+/build/
+/build-*/
+/install/
+/.qmake.stash
+/Makefile
+/PROG_ARCH
+/rars_arm
+/*.o
+/*.pro.user
