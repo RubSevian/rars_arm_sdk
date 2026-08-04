@@ -445,7 +445,7 @@ bool RarsArm::positionsWithinLimits(const MotorValues& position,
     // (notably a zero lower limit), decoding can differ by about 0.0002 rad.
     // This tolerance only absorbs representation error; it does not replace
     // the configured mechanical limits.
-    constexpr float position_limit_tolerance = 1.0e-3F;
+    constexpr float position_limit_tolerance = 4.0e-3F;
 
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {

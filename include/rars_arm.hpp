@@ -33,13 +33,18 @@ struct ArmConfiguration
       60.0F, 60.0F, 60.0F, 20.0F, 20.0F, 20.0F, 20.0F};
     std::array<float, kArmMotorCount> default_kd{
       1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
+    // std::array<float, kArmMotorCount> default_kp{
+    //   0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+    // std::array<float, kArmMotorCount> default_kd{
+    //   0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+
 
     // Entries 0..5 are arm joints; entry 6 is the gripper motor.
     std::array<MotorConfiguration, kArmMotorCount> motors{{
       {ArmMotorType::DM4340, 1.0F, 0.0F, -2.8F, 2.8F, 2.57F, 15.0F},
-      {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.14F, 2.57F, 15.0F},
-      {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.14F, 2.57F, 15.0F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -1.4F, 1.4F, 4.57F, 7.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.5F, 2.57F, 20.0F},
+      {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.14F, 2.57F, 20.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -2.0F, 1.4F, 4.57F, 7.0F},
       {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 7.0F},
       {ArmMotorType::DM4310, 1.0F, 0.0F, -2.0F, 2.0F, 4.57F, 5.0F},
       {ArmMotorType::DM4310, 1.0F, 0.0F, 0.0F, 1.4F, 4.57F, 5.0F},
