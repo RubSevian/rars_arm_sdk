@@ -1,6 +1,7 @@
 #include <rars_arm.hpp>
 
 #include <QApplication>
+#include <QComboBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -11,6 +12,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 namespace
@@ -19,7 +22,6 @@ namespace
 constexpr int kSliderMinimum = -10000;
 constexpr int kSliderMaximum = 10000;
 
-constexpr int kSendPeriodMs		= 5;  // 200 Гц
 constexpr int kFeedbackPeriodMs = 30; // около 33 Гц
 
 float sliderToPosition(int value, const rars_arm::MotorConfiguration& motor)
@@ -35,6 +37,8 @@ void addMotorRow(QGridLayout*	grid,
                  int			row,
                  const QString& name,
                  QSlider*&		slider,
+                 QComboBox*& mode_combo,
+                 QLabel*& velocity_limit_label,
                  QLabel*&		target_label,
                  QLabel*&		current_label,
                  QLabel*&		error_label,
@@ -56,6 +60,12 @@ void addMotorRow(QGridLayout*	grid,
 
     rotor_temperature_label = new QLabel(QStringLiteral("Rotor: -- C"));
 
+    mode_combo = new QComboBox();
+    mode_combo->addItem(QStringLiteral("POS_VEL"));
+    mode_combo->addItem(QStringLiteral("MIT"));
+
+    velocity_limit_label = new QLabel(QStringLiteral("vlim: -- rad/s"));
+
     slider = new QSlider(Qt::Horizontal);
     slider->setRange(kSliderMinimum, kSliderMaximum);
     slider->setValue(0);
@@ -63,13 +73,15 @@ void addMotorRow(QGridLayout*	grid,
     slider->setTickInterval(2000);
 
     grid->addWidget(name_label, row, 0);
-    grid->addWidget(slider, row, 1);
-    grid->addWidget(target_label, row, 2);
-    grid->addWidget(current_label, row, 3);
-    grid->addWidget(error_label, row, 4);
-    grid->addWidget(torque_label, row, 5);
-    grid->addWidget(mos_temperature_label, row, 6);
-    grid->addWidget(rotor_temperature_label, row, 7);
+    grid->addWidget(mode_combo, row, 1);
+    grid->addWidget(velocity_limit_label, row, 2);
+    grid->addWidget(slider, row, 3);
+    grid->addWidget(target_label, row, 4);
+    grid->addWidget(current_label, row, 5);
+    grid->addWidget(error_label, row, 6);
+    grid->addWidget(torque_label, row, 7);
+    grid->addWidget(mos_temperature_label, row, 8);
+    grid->addWidget(rotor_temperature_label, row, 9);
 }
 
 } // namespace
@@ -103,6 +115,10 @@ int main(int argc, char* argv[])
 
     std::array<QSlider*, rars_arm::kArmMotorCount> sliders{};
 
+    std::array<QComboBox*, rars_arm::kArmMotorCount> mode_combos{};
+
+    std::array<QLabel*, rars_arm::kArmMotorCount> velocity_limit_labels{};
+
     std::array<QLabel*, rars_arm::kArmMotorCount> target_labels{};
 
     std::array<QLabel*, rars_arm::kArmMotorCount> current_labels{};
@@ -129,12 +145,21 @@ int main(int argc, char* argv[])
                     static_cast<int>(i),
                     motor_name,
                     sliders[i],
+                    mode_combos[i],
+                    velocity_limit_labels[i],
                     target_labels[i],
                     current_labels[i],
                     error_labels[i],
                     torque_labels[i],
                     mos_temperature_labels[i],
                     rotor_temperature_labels[i]);
+
+        const bool position_velocity = arm.configuration().control_modes[i]
+                                       == rars_arm::ArmControlMode::PositionVelocity;
+        mode_combos[i]->setCurrentIndex(position_velocity ? 0 : 1);
+        velocity_limit_labels[i]->setText(
+          QStringLiteral("vlim: %1 rad/s")
+            .arg(arm.configuration().position_velocity_limits[i], 0, 'f', 2));
 
         QObject::connect(sliders[i],
                          &QSlider::valueChanged,
@@ -169,7 +194,9 @@ int main(int argc, char* argv[])
     main_layout->addLayout(button_layout);
 
     QTimer send_timer;
-    send_timer.setInterval(kSendPeriodMs);
+    const int send_period_ms = std::max(
+      1, static_cast<int>(std::lround(1000.0F / arm.configuration().command_rate_hz)));
+    send_timer.setInterval(send_period_ms);
     send_timer.setTimerType(Qt::PreciseTimer);
 
     QTimer feedback_timer;
@@ -190,13 +217,16 @@ int main(int argc, char* argv[])
                                                 ? QStringLiteral("ok")
                                                 : QStringLiteral("waiting");
         communication_label->setText(
-          QStringLiteral("feedback: %1, watchdog: %2, valid: %3, invalid: %4, timeouts: %5, read errors: %6")
+          QStringLiteral("feedback: %1, SDK watchdog: %2, STM watchdog: %3, protocol v2: %4, valid: %5, invalid: %6, timeouts: %7")
             .arg(feedback_age)
             .arg(watchdog_state)
+            .arg(communication.stm32_watchdog_tripped ? QStringLiteral("TRIPPED")
+                                                       : QStringLiteral("ok"))
+            .arg(communication.protocol_v2_detected ? QStringLiteral("yes")
+                                                     : QStringLiteral("no"))
             .arg(static_cast<qulonglong>(communication.valid_frames))
             .arg(static_cast<qulonglong>(communication.invalid_frames))
-            .arg(static_cast<qulonglong>(communication.read_timeouts))
-            .arg(static_cast<qulonglong>(communication.read_errors)));
+            .arg(static_cast<qulonglong>(communication.read_timeouts)));
 
         if (!arm.tryReadJointState(arm_state))
             return;
@@ -240,6 +270,8 @@ int main(int argc, char* argv[])
               motors_enabled = false;
 
               arm.disable();
+              for (auto* combo : mode_combos)
+                  combo->setEnabled(true);
 
               QMessageBox::critical(&window,
                                     QStringLiteral("Write error"),
@@ -262,6 +294,19 @@ int main(int argc, char* argv[])
                 sliders[i]->value(), arm.configuration().motors[i]);
           }
 
+          rars_arm::ArmMotorControl::ControlModes modes{};
+          for (std::size_t i = 0; i < rars_arm::kArmMotorCount; ++i)
+              modes[i] = mode_combos[i]->currentIndex() == 0
+                           ? rars_arm::ArmControlMode::PositionVelocity
+                           : rars_arm::ArmControlMode::MIT;
+          if (!arm.setControlModes(modes))
+          {
+              QMessageBox::critical(&window,
+                                    QStringLiteral("Mode error"),
+                                    QString::fromStdString(arm.lastError()));
+              return;
+          }
+
           if (!arm.enable())
           {
               QMessageBox::critical(&window,
@@ -272,6 +317,8 @@ int main(int argc, char* argv[])
           }
 
           motors_enabled = true;
+          for (auto* combo : mode_combos)
+              combo->setEnabled(false);
           send_timer.start();
       });
 
@@ -280,14 +327,16 @@ int main(int argc, char* argv[])
       &QPushButton::clicked,
       [&]() {
           send_timer.stop();
-          motors_enabled = false;
-
-          for (int attempt = 0; attempt < 5; ++attempt)
+          if (!arm.disable())
           {
-              QTimer::singleShot(
-                attempt * 50,
-                [&]() { arm.disable(); });
+              QMessageBox::critical(&window,
+                                    QStringLiteral("Disable error"),
+                                    QString::fromStdString(arm.lastError()));
+              return;
           }
+          motors_enabled = false;
+          for (auto* combo : mode_combos)
+              combo->setEnabled(true);
       });
 
     QObject::connect(

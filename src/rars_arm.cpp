@@ -60,7 +60,7 @@ void RarsArm::disconnect() noexcept
     {
         // Best effort: destruction and shutdown must never throw or hang on an
         // error-reporting path.
-        static_cast<void>(motor_control_.disable(serial_));
+        static_cast<void>(motor_control_.disable(serial_, configuration_.control_modes));
     }
 
     enabled_ = false;
@@ -97,7 +97,7 @@ bool RarsArm::enable()
     // sending enable so that the first enabled-state replies are preserved.
     serial_.resetStatistics();
 
-    if (!motor_control_.enable(serial_))
+    if (!motor_control_.enable(serial_, configuration_.control_modes))
     {
         copySerialError("Failed to send enable command");
         return false;
@@ -106,10 +106,10 @@ bool RarsArm::enable()
     // Preserve the proven hardware-test sequence: the controller receives the
     // enable frame twice before cyclic commands begin.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    if (!motor_control_.enable(serial_))
+    if (!motor_control_.enable(serial_, configuration_.control_modes))
     {
         copySerialError("Failed to confirm enable command");
-        static_cast<void>(motor_control_.disable(serial_));
+        static_cast<void>(motor_control_.disable(serial_, configuration_.control_modes));
         return false;
     }
 
@@ -130,7 +130,7 @@ bool RarsArm::disable()
         return false;
     }
 
-    if (!motor_control_.disable(serial_))
+    if (!motor_control_.disable(serial_, configuration_.control_modes))
     {
         copySerialError("Failed to send disable command");
         return false;
@@ -158,7 +158,7 @@ bool RarsArm::setZero()
         return false;
     }
 
-    if (!motor_control_.setZero(serial_))
+    if (!motor_control_.setZero(serial_, configuration_.control_modes))
     {
         copySerialError("Failed to send set-zero command");
         return false;
@@ -174,6 +174,32 @@ bool RarsArm::sendMit(const MotorValues& position,
                       const MotorValues& kd,
                       const MotorValues& torque)
 {
+    ArmMotorControl::ControlModes modes{};
+    modes.fill(ArmControlMode::MIT);
+    return sendWithModes(position, velocity, kp, kd, torque, modes);
+}
+
+bool RarsArm::sendConfigured(const MotorValues& position,
+                             const MotorValues& velocity,
+                             const MotorValues& kp,
+                             const MotorValues& kd,
+                             const MotorValues& torque)
+{
+    return sendWithModes(position,
+                         velocity,
+                         kp,
+                         kd,
+                         torque,
+                         configuration_.control_modes);
+}
+
+bool RarsArm::sendWithModes(const MotorValues& position,
+                            const MotorValues& velocity,
+                            const MotorValues& kp,
+                            const MotorValues& kd,
+                            const MotorValues& torque,
+                            const ArmMotorControl::ControlModes& modes)
+{
     std::lock_guard<std::mutex> lock(operation_mutex_);
 
     if (!serial_.isOpen() || !serial_.isReceiving())
@@ -185,6 +211,12 @@ bool RarsArm::sendMit(const MotorValues& position,
     if (!enabled_)
     {
         setLastError("Cannot send a command: motors are disabled.");
+        return false;
+    }
+
+    if (modes != configuration_.control_modes)
+    {
+        setLastError("Command modes differ from the modes selected before enable.");
         return false;
     }
 
@@ -217,7 +249,8 @@ bool RarsArm::sendMit(const MotorValues& position,
 
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
-        if (std::abs(velocity[i]) > configuration_.motors[i].joint_velocity_max)
+        if (modes[i] == ArmControlMode::MIT
+            && std::abs(velocity[i]) > configuration_.motors[i].joint_velocity_max)
         {
             setLastError("Motor " + std::to_string(i + 1U)
                          + " joint velocity " + std::to_string(velocity[i])
@@ -228,7 +261,8 @@ bool RarsArm::sendMit(const MotorValues& position,
                          + "].");
             return false;
         }
-        if (std::abs(torque[i]) > configuration_.motors[i].joint_torque_max)
+        if (modes[i] == ArmControlMode::MIT
+            && std::abs(torque[i]) > configuration_.motors[i].joint_torque_max)
         {
             setLastError("Motor " + std::to_string(i + 1U)
                          + " joint torque " + std::to_string(torque[i])
@@ -247,10 +281,12 @@ bool RarsArm::sendMit(const MotorValues& position,
         auto& motor = command.motor_cmd()[i];
         const auto& motor_configuration = configuration_.motors[i];
         motor.motor_type() = motor_configuration.type;
-        motor.mode() = ArmControlMode::MIT;
+        motor.mode() = modes[i];
         motor.q() = motor_configuration.direction * position[i]
                     + motor_configuration.zero_offset;
-        motor.dq() = motor_configuration.direction * velocity[i];
+        motor.dq() = modes[i] == ArmControlMode::PositionVelocity
+                       ? configuration_.position_velocity_limits[i]
+                       : motor_configuration.direction * velocity[i];
         motor.kp() = kp[i];
         motor.kd() = kd[i];
         motor.tau() = motor_configuration.direction * torque[i];
@@ -279,11 +315,30 @@ bool RarsArm::sendMit(const MotorValues& position,
 bool RarsArm::sendPositionTargets(const MotorValues& position)
 {
     const MotorValues zeros{};
-    return sendMit(position,
-                   zeros,
-                   configuration_.default_kp,
-                   configuration_.default_kd,
-                   zeros);
+    return sendConfigured(position,
+                          zeros,
+                          configuration_.default_kp,
+                          configuration_.default_kd,
+                          zeros);
+}
+
+bool RarsArm::setControlModes(const ArmMotorControl::ControlModes& modes)
+{
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    if (enabled_)
+    {
+        setLastError("Cannot change control modes while motors are enabled.");
+        return false;
+    }
+    configuration_.control_modes = modes;
+    setLastError("");
+    return true;
+}
+
+ArmMotorControl::ControlModes RarsArm::controlModes() const
+{
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    return configuration_.control_modes;
 }
 
 bool RarsArm::tryReadState(ArmLowState& state)
@@ -335,6 +390,9 @@ CommunicationStatus RarsArm::communicationStatus() const
     status.watchdog_armed = watchdog_armed_;
     status.watchdog_tripped = status.connected && watchdog_armed_
                               && watchdogTripped(serial_status, std::chrono::steady_clock::now());
+    status.protocol_v2_detected = motor_control_.protocolV2Detected();
+    status.stm32_watchdog_tripped = motor_control_.stm32WatchdogTripped();
+    status.last_acknowledged_control = motor_control_.lastAcknowledgedControl();
     status.valid_frames = serial_status.valid_frames;
     status.invalid_frames = serial_status.invalid_frames;
     status.read_timeouts = serial_status.read_timeouts;
@@ -374,6 +432,10 @@ void RarsArm::validateConfiguration(const ArmConfiguration& configuration)
         throw std::invalid_argument("Serial port name must not be empty.");
     if (configuration.baud_rate == 0U)
         throw std::invalid_argument("Baud rate must be greater than zero.");
+    if (!std::isfinite(configuration.command_rate_hz)
+        || configuration.command_rate_hz <= 0.0F
+        || configuration.command_rate_hz > 500.0F)
+        throw std::invalid_argument("Command rate must be in (0, 500] Hz.");
     if (configuration.feedback_timeout.count() <= 0
         || configuration.initial_feedback_grace.count() <= 0)
         throw std::invalid_argument("Feedback watchdog timeouts must be greater than zero.");
@@ -406,6 +468,17 @@ void RarsArm::validateConfiguration(const ArmConfiguration& configuration)
             || configuration.default_kd[i] > 5.0F)
             throw std::invalid_argument("KD must be in [0, 5] at index "
                                         + std::to_string(i) + ".");
+
+        if (configuration.control_modes[i] != ArmControlMode::MIT
+            && configuration.control_modes[i] != ArmControlMode::PositionVelocity)
+            throw std::invalid_argument("Unsupported control mode at index "
+                                        + std::to_string(i) + ".");
+        if (!std::isfinite(configuration.position_velocity_limits[i])
+            || configuration.position_velocity_limits[i] <= 0.0F
+            || configuration.position_velocity_limits[i] > motor.joint_velocity_max)
+            throw std::invalid_argument(
+              "POS_VEL velocity limit must be within the joint velocity limit at index "
+              + std::to_string(i) + ".");
 
         const float protocol_velocity_max =
           motor.type == ArmMotorType::DM4340 ? 10.0F : 30.0F;
@@ -445,7 +518,7 @@ bool RarsArm::positionsWithinLimits(const MotorValues& position,
     // (notably a zero lower limit), decoding can differ by about 0.0002 rad.
     // This tolerance only absorbs representation error; it does not replace
     // the configured mechanical limits.
-    constexpr float position_limit_tolerance = 4.0e-3F;
+    constexpr float position_limit_tolerance = 8.0e-3F;
 
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {

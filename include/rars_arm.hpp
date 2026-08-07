@@ -33,6 +33,18 @@ struct ArmConfiguration
       60.0F, 60.0F, 60.0F, 20.0F, 20.0F, 20.0F, 20.0F};
     std::array<float, kArmMotorCount> default_kd{
       1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
+    // Arm joints use the motor's internal position-velocity controller;
+    // the current RARS01 gripper keeps MIT torque control.
+    std::array<ArmControlMode, kArmMotorCount> control_modes{
+      ArmControlMode::PositionVelocity, ArmControlMode::PositionVelocity,
+      ArmControlMode::PositionVelocity, ArmControlMode::PositionVelocity,
+      ArmControlMode::PositionVelocity, ArmControlMode::PositionVelocity,
+      ArmControlMode::MIT};
+    std::array<float, kArmMotorCount> position_velocity_limits{
+      2.0F, 2.0F, 2.0F, 3.0F, 3.0F, 3.0F, 2.0F};
+    // The SDK caller streams commands at this rate. STM32 only measures the
+    // independent command timeout; it does not generate trajectories.
+    float command_rate_hz = 100.0F;
     // std::array<float, kArmMotorCount> default_kp{
     //   0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
     // std::array<float, kArmMotorCount> default_kd{
@@ -46,7 +58,7 @@ struct ArmConfiguration
       {ArmMotorType::DM4340, 1.0F, 0.0F, 0.0F, 3.14F, 2.57F, 20.0F},
       {ArmMotorType::DM4310, 1.0F, 0.0F, -2.0F, 1.4F, 4.57F, 7.0F},
       {ArmMotorType::DM4310, 1.0F, 0.0F, -1.57F, 1.57F, 4.57F, 7.0F},
-      {ArmMotorType::DM4310, 1.0F, 0.0F, -2.0F, 2.0F, 4.57F, 5.0F},
+      {ArmMotorType::DM4310, 1.0F, 0.0F, -3.14F, 3.14F, 4.57F, 5.0F},
       {ArmMotorType::DM4310, 1.0F, 0.0F, 0.0F, 1.4F, 4.57F, 5.0F},
     }};
 
@@ -76,6 +88,9 @@ struct CommunicationStatus
     bool feedback_received = false;
     bool watchdog_armed = false;
     bool watchdog_tripped = false;
+    bool protocol_v2_detected = false;
+    bool stm32_watchdog_tripped = false;
+    std::uint8_t last_acknowledged_control = 0;
     std::chrono::milliseconds feedback_age{0};
     std::uint64_t valid_frames = 0;
     std::uint64_t invalid_frames = 0;
@@ -114,7 +129,19 @@ public:
                  const MotorValues& kd,
                  const MotorValues& torque);
 
+    // Uses control_modes from ArmConfiguration. POS_VEL motors consume q and
+    // their configured velocity limit; MIT motors consume all five arrays.
+    bool sendConfigured(const MotorValues& position,
+                        const MotorValues& velocity,
+                        const MotorValues& kp,
+                        const MotorValues& kd,
+                        const MotorValues& torque);
+
     bool sendPositionTargets(const MotorValues& position);
+
+    // Mode changes are accepted only while motors are disabled.
+    bool setControlModes(const ArmMotorControl::ControlModes& modes);
+    [[nodiscard]] ArmMotorControl::ControlModes controlModes() const;
 
     // Returns true only when a new feedback packet has arrived since the
     // previous call. The supplied state is left unchanged otherwise.
@@ -140,6 +167,12 @@ private:
     void setLastError(std::string message);
     void copySerialError(const std::string& context);
     void copyMotorError(const std::string& context);
+    bool sendWithModes(const MotorValues& position,
+                       const MotorValues& velocity,
+                       const MotorValues& kp,
+                       const MotorValues& kd,
+                       const MotorValues& torque,
+                       const ArmMotorControl::ControlModes& modes);
 
 private:
     ArmConfiguration configuration_;

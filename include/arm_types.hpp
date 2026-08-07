@@ -18,7 +18,8 @@ enum class ArmMotorType : std::uint8_t
 };
 enum class ArmControlMode : std::uint8_t
 {
-    MIT = 0x01
+    MIT = 0x01,
+    PositionVelocity = 0x02
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//

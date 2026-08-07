@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cstring>
 #include <utility>
 
 namespace rars_arm
@@ -45,43 +46,34 @@ ArmMotorControl::ArmMotorControl(std::array<ArmMotorType, kArmMotorCount> motor_
       last_command_motor_types_(configured_motor_types_)
 {}
 
-bool ArmMotorControl::enable(ArmSerialPort& serial)
+bool ArmMotorControl::enable(ArmSerialPort& serial, const ControlModes& modes)
 {
-    ArmSerialPort::Payload payload{};
-
-    const auto special_command = makeSpecialCommand(EnableByte);
-
-    for (std::size_t i = 0; i < kArmMotorCount; ++i)
-    {
-        std::copy(special_command.begin(),
-                  special_command.end(),
-                  payload.begin() + static_cast<std::ptrdiff_t>(i * 8));
-    }
-
-    return serial.sendPayload(payload);
+    return sendAction(serial, modes, ActionEnable);
 }
 
-bool ArmMotorControl::disable(ArmSerialPort& serial)
+bool ArmMotorControl::disable(ArmSerialPort& serial, const ControlModes& modes)
 {
-    ArmSerialPort::Payload payload{};
-
-    const auto special_command = makeSpecialCommand(DisableByte);
-
-    for (std::size_t i = 0; i < kArmMotorCount; ++i)
-    {
-        std::copy(special_command.begin(),
-                  special_command.end(),
-                  payload.begin() + static_cast<std::ptrdiff_t>(i * 8));
-    }
-
-    return serial.sendPayload(payload);
+    return sendAction(serial, modes, ActionDisable);
 }
 
-bool ArmMotorControl::setZero(ArmSerialPort& serial)
+bool ArmMotorControl::setZero(ArmSerialPort& serial, const ControlModes& modes)
+{
+    return sendAction(serial, modes, ActionSetZero);
+}
+
+bool ArmMotorControl::sendAction(ArmSerialPort& serial,
+                                 const ControlModes& modes,
+                                 std::uint8_t action)
 {
     ArmSerialPort::Payload payload{};
 
-    const auto special_command = makeSpecialCommand(SetZeroByte);
+    std::uint8_t special_byte = EnableByte;
+    if (action == ActionDisable)
+        special_byte = DisableByte;
+    else if (action == ActionSetZero)
+        special_byte = SetZeroByte;
+
+    const auto special_command = makeSpecialCommand(special_byte);
 
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
@@ -90,6 +82,7 @@ bool ArmMotorControl::setZero(ArmSerialPort& serial)
                   payload.begin() + static_cast<std::ptrdiff_t>(i * 8));
     }
 
+    addProtocolMetadata(payload, modes, action);
     return serial.sendPayload(payload);
 }
 
@@ -100,25 +93,33 @@ bool ArmMotorControl::write(ArmSerialPort& serial, const ArmLowCmd& low_cmd)
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
     {
         const auto& command = low_cmd.motor_cmd()[i];
-        if (command.mode() != ArmControlMode::MIT)
-        {
-            setLastError("Для мотора поддерживается только MIT mode.");
-            return false;
-        }
-
         if (!validateMotorType(i, command.motor_type()))
             return false;
 
         if (!validateProtocolLimits(command, i))
             return false;
 
-        const auto frame = packMitCommand(command);
+        std::array<std::uint8_t, 8> frame{};
+        if (command.mode() == ArmControlMode::MIT)
+            frame = packMitCommand(command);
+        else if (command.mode() == ArmControlMode::PositionVelocity)
+            frame = packPositionVelocityCommand(command);
+        else
+        {
+            setLastError("Unsupported control mode for motor "
+                         + std::to_string(i + 1U) + ".");
+            return false;
+        }
 
         std::copy(frame.begin(), frame.end(), payload.begin() + static_cast<std::ptrdiff_t>(i * 8));
 
         last_command_motor_types_[i] = command.motor_type();
     }
 
+    ControlModes modes{};
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+        modes[i] = low_cmd.motor_cmd()[i].mode();
+    addProtocolMetadata(payload, modes, ActionCommand);
     return serial.sendPayload(payload);
 }
 
@@ -129,6 +130,13 @@ bool ArmMotorControl::read(ArmSerialPort& serial, ArmLowState& low_state)
     if (!serial.getReceivedPayload(payload))
         return false;
 
+    protocol_v2_detected_ = payload[ProtocolMarkerIndex] == ProtocolMarker;
+    if (protocol_v2_detected_)
+    {
+        stm32_watchdog_tripped_ = (payload[ProtocolModeMaskIndex] & 0x80U) != 0U;
+        last_acknowledged_control_ = payload[ProtocolControlIndex];
+    }
+
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
         if (!decodeMotorFeedback(payload,
                                  i,
@@ -137,6 +145,21 @@ bool ArmMotorControl::read(ArmSerialPort& serial, ArmLowState& low_state)
             low_state.motor_state_[i].valid_ = false;
 
     return true;
+}
+
+bool ArmMotorControl::protocolV2Detected() const noexcept
+{
+    return protocol_v2_detected_;
+}
+
+bool ArmMotorControl::stm32WatchdogTripped() const noexcept
+{
+    return stm32_watchdog_tripped_;
+}
+
+std::uint8_t ArmMotorControl::lastAcknowledgedControl() const noexcept
+{
+    return last_acknowledged_control_;
 }
 
 std::array<std::uint8_t, 8> ArmMotorControl::packMitCommand(const ArmMotorCmd& command)
@@ -178,6 +201,37 @@ std::array<std::uint8_t, 8> ArmMotorControl::packMitCommand(const ArmMotorCmd& c
     frame[7] = static_cast<std::uint8_t>(tau_int & 0xFFU);
 
     return frame;
+}
+
+std::array<std::uint8_t, 8> ArmMotorControl::packPositionVelocityCommand(
+  const ArmMotorCmd& command) const
+{
+    std::array<std::uint8_t, 8> frame{};
+    const float position = command.q();
+    const float velocity_limit = command.dq();
+    static_assert(sizeof(float) == 4, "Position-velocity protocol requires float32");
+    std::memcpy(frame.data(), &position, sizeof(position));
+    std::memcpy(frame.data() + sizeof(position), &velocity_limit, sizeof(velocity_limit));
+    return frame;
+}
+
+void ArmMotorControl::addProtocolMetadata(ArmSerialPort::Payload& payload,
+                                          const ControlModes& modes,
+                                          std::uint8_t action)
+{
+    payload[ProtocolMarkerIndex] = ProtocolMarker;
+    payload[ProtocolModeMaskIndex] = modeMask(modes);
+    payload[ProtocolControlIndex] = static_cast<std::uint8_t>(
+      ((sequence_++ & 0x3FU) << 2U) | (action & 0x03U));
+}
+
+std::uint8_t ArmMotorControl::modeMask(const ControlModes& modes)
+{
+    std::uint8_t mask = 0;
+    for (std::size_t i = 0; i < kArmMotorCount; ++i)
+        if (modes[i] == ArmControlMode::PositionVelocity)
+            mask |= static_cast<std::uint8_t>(1U << i);
+    return mask;
 }
 
 std::array<std::uint8_t, 8> ArmMotorControl::makeSpecialCommand(std::uint8_t special_byte) const
@@ -227,7 +281,11 @@ bool ArmMotorControl::decodeMotorFeedback(const ArmSerialPort::Payload& payload,
 
     const std::uint8_t expected_id = static_cast<std::uint8_t>(motor_index + 1U);
 
-    state.valid_ = state.motor_id_ == expected_id;
+    const bool protocol_v2 = payload[ProtocolMarkerIndex] == ProtocolMarker;
+    const bool stm_feedback_valid = !protocol_v2
+                                    || (payload[ProtocolModeMaskIndex]
+                                        & static_cast<std::uint8_t>(1U << motor_index)) != 0U;
+    state.valid_ = stm_feedback_valid && state.motor_id_ == expected_id;
 
     return state.valid_;
 }
@@ -294,22 +352,30 @@ bool ArmMotorControl::validateProtocolLimits(const ArmMotorCmd& command,
         setLastError(prefix + "position is outside protocol limits.");
         return false;
     }
-    if (!in_range(command.dq(), protocol.velocity_min, protocol.velocity_max))
+    const bool velocity_valid = command.mode() == ArmControlMode::PositionVelocity
+                                  ? std::isfinite(command.dq()) && command.dq() > 0.0F
+                                      && command.dq() <= protocol.velocity_max
+                                  : in_range(command.dq(), protocol.velocity_min,
+                                             protocol.velocity_max);
+    if (!velocity_valid)
     {
         setLastError(prefix + "velocity is outside protocol limits.");
         return false;
     }
-    if (!in_range(command.tau(), protocol.torque_min, protocol.torque_max))
+    if (command.mode() == ArmControlMode::MIT
+        && !in_range(command.tau(), protocol.torque_min, protocol.torque_max))
     {
         setLastError(prefix + "torque is outside protocol limits.");
         return false;
     }
-    if (!in_range(command.kp(), protocol.kp_min, protocol.kp_max))
+    if (command.mode() == ArmControlMode::MIT
+        && !in_range(command.kp(), protocol.kp_min, protocol.kp_max))
     {
         setLastError(prefix + "kp is outside protocol limits.");
         return false;
     }
-    if (!in_range(command.kd(), protocol.kd_min, protocol.kd_max))
+    if (command.mode() == ArmControlMode::MIT
+        && !in_range(command.kd(), protocol.kd_min, protocol.kd_max))
     {
         setLastError(prefix + "kd is outside protocol limits.");
         return false;

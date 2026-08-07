@@ -21,6 +21,10 @@ PYBIND11_MODULE(rars_arm_py, module)
       .value("DM4310", ArmMotorType::DM4310)
       .value("DM4340", ArmMotorType::DM4340);
 
+    py::enum_<ArmControlMode>(module, "ArmControlMode")
+      .value("MIT", ArmControlMode::MIT)
+      .value("POSITION_VELOCITY", ArmControlMode::PositionVelocity);
+
     py::class_<MotorConfiguration>(module, "MotorConfiguration")
       .def(py::init<>())
       .def_readwrite("type", &MotorConfiguration::type)
@@ -37,6 +41,10 @@ PYBIND11_MODULE(rars_arm_py, module)
       .def_readwrite("baud_rate", &ArmConfiguration::baud_rate)
       .def_readwrite("default_kp", &ArmConfiguration::default_kp)
       .def_readwrite("default_kd", &ArmConfiguration::default_kd)
+      .def_readwrite("control_modes", &ArmConfiguration::control_modes)
+      .def_readwrite("position_velocity_limits",
+                     &ArmConfiguration::position_velocity_limits)
+      .def_readwrite("command_rate_hz", &ArmConfiguration::command_rate_hz)
       .def_readwrite("motors", &ArmConfiguration::motors)
       .def(
         "motor",
@@ -73,6 +81,11 @@ PYBIND11_MODULE(rars_arm_py, module)
       .def_readonly("feedback_received", &CommunicationStatus::feedback_received)
       .def_readonly("watchdog_armed", &CommunicationStatus::watchdog_armed)
       .def_readonly("watchdog_tripped", &CommunicationStatus::watchdog_tripped)
+      .def_readonly("protocol_v2_detected", &CommunicationStatus::protocol_v2_detected)
+      .def_readonly("stm32_watchdog_tripped",
+                    &CommunicationStatus::stm32_watchdog_tripped)
+      .def_readonly("last_acknowledged_control",
+                    &CommunicationStatus::last_acknowledged_control)
       .def_property_readonly("feedback_age_ms", [](const CommunicationStatus& status) {
           return status.feedback_age.count();
       })
@@ -109,10 +122,21 @@ PYBIND11_MODULE(rars_arm_py, module)
         py::arg("kd"),
         py::arg("torque"),
         py::call_guard<py::gil_scoped_release>())
+      .def(
+        "send_configured",
+        &RarsArm::sendConfigured,
+        py::arg("position"),
+        py::arg("velocity"),
+        py::arg("kp"),
+        py::arg("kd"),
+        py::arg("torque"),
+        py::call_guard<py::gil_scoped_release>())
       .def("send_position_targets",
            &RarsArm::sendPositionTargets,
            py::arg("position"),
            py::call_guard<py::gil_scoped_release>())
+      .def("set_control_modes", &RarsArm::setControlModes, py::arg("modes"))
+      .def_property_readonly("control_modes", &RarsArm::controlModes)
       .def("try_read_joint_state", [](RarsArm& arm) -> py::object {
           JointState state;
           bool received = false;

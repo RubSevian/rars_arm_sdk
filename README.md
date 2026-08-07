@@ -50,7 +50,10 @@ cmake --build build
 ```
 
 Qt-пример работает с реальными моторами. Перед `enable` робот должен находиться
-в безопасной зоне.
+в безопасной зоне. В каждой строке выбирается режим конкретного мотора:
+`POS_VEL` или `MIT`. Переключатели блокируются после `Enable` и снова доступны
+после успешного `Disable`. Период отправки вычисляется из
+`ArmConfiguration.command_rate_hz` (по умолчанию `100 Hz`).
 
 ## Подключение из другого CMake-проекта
 
@@ -81,6 +84,9 @@ cmake --install build --prefix build/stage
 |---|---|
 | `port_name`, `baud_rate` | последовательный порт |
 | `default_kp[7]`, `default_kd[7]` | коэффициенты MIT position-команды |
+| `control_modes[7]` | режим каждого мотора: `POSITION_VELOCITY` или `MIT` |
+| `position_velocity_limits[7]` | предел скорости для POS_VEL, рад/с |
+| `command_rate_hz` | частота, с которой вызывающий код должен отправлять команды |
 | `motors[i].type` | `DM4340` или `DM4310` |
 | `motors[i].direction` | преобразование знака, только `+1` или `-1` |
 | `motors[i].zero_offset` | смещение между joint и motor координатами |
@@ -95,6 +101,16 @@ SDK проверяет `kp` в диапазоне `[0, 500]`, `kd` в `[0, 5]`, 
 таймаутов, motor type, direction, offset и соответствие limit-параметров
 протоколу выбранного мотора.
 
+Штатно суставы `1..6` работают в `POSITION_VELOCITY`, а мотор гриппера `7` —
+в `MIT`. Режим можно изменить отдельно для каждого мотора через
+`setControlModes()`/`set_control_modes()`, но только до `enable` или после
+`disable`.
+
+`command_rate_hz` не создаёт скрытый поток внутри библиотеки: частоту соблюдает
+внешний control loop. Для рабочего grasp-драйвера используется `100 Hz`.
+STM32 выполняет независимый watchdog `250 ms`, поэтому зависание процесса на
+Linux не отключает защиту платы.
+
 ## C++ API
 
 ```cpp
@@ -105,6 +121,9 @@ config.port_name = "/dev/ttyACM0";
 config.baud_rate = 921600;
 config.default_kp[0] = 60.0F;
 config.default_kd[0] = 1.0F;
+config.command_rate_hz = 100.0F;
+config.control_modes[0] = rars_arm::ArmControlMode::PositionVelocity;
+config.position_velocity_limits[0] = 0.5F;
 config.motors[0].direction = 1.0F;
 config.motors[0].zero_offset = 0.0F;
 
@@ -159,6 +178,17 @@ state = arm.try_read_joint_state()
 arm.disable()
 arm.disconnect()
 ```
+
+Для смешанной команды (POS_VEL руки плюс MIT гриппера) используется
+`send_configured(...)`. `send_mit(...)` теперь предназначен только для случая,
+когда все семь моторов были заранее переведены в MIT.
+
+## Протокол платы
+
+SDK использует USB-протокол v2, не изменяя размер старого кадра 64 байта. В
+последних трёх байтах payload передаются маркер версии, побитовая маска режимов,
+команда enable/disable/set-zero и номер пакета. Полное описание находится в
+`Light_lift_arm_6dof_h7_code/README_RARS_CONTROL.md` в общем workspace.
 
 Запуск из build-каталога:
 
