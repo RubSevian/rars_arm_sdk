@@ -217,8 +217,11 @@ int main(int argc, char* argv[])
                                                 ? QStringLiteral("ok")
                                                 : QStringLiteral("waiting");
         communication_label->setText(
-          QStringLiteral("feedback: %1, SDK watchdog: %2, STM watchdog: %3, protocol v2: %4, valid: %5, invalid: %6, timeouts: %7")
+          QStringLiteral("feedback: %1, board: %2 C, SDK watchdog: %3, STM watchdog: %4, protocol v2: %5, valid: %6, invalid: %7, timeouts: %8")
             .arg(feedback_age)
+            .arg(communication.board_temperature_c >= 0
+                   ? QString::number(communication.board_temperature_c)
+                   : QStringLiteral("n/a"))
             .arg(watchdog_state)
             .arg(communication.stm32_watchdog_tripped ? QStringLiteral("TRIPPED")
                                                        : QStringLiteral("ok"))

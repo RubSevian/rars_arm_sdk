@@ -393,6 +393,8 @@ CommunicationStatus RarsArm::communicationStatus() const
     status.protocol_v2_detected = motor_control_.protocolV2Detected();
     status.stm32_watchdog_tripped = motor_control_.stm32WatchdogTripped();
     status.last_acknowledged_control = motor_control_.lastAcknowledgedControl();
+    if (status.protocol_v2_detected && serial_status.feedback_received)
+        status.board_temperature_c = static_cast<int>(serial_.lastReceivedPayload()[58] >> 2U) * 2;
     status.valid_frames = serial_status.valid_frames;
     status.invalid_frames = serial_status.invalid_frames;
     status.read_timeouts = serial_status.read_timeouts;

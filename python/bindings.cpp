@@ -86,6 +86,7 @@ PYBIND11_MODULE(rars_arm_py, module)
                     &CommunicationStatus::stm32_watchdog_tripped)
       .def_readonly("last_acknowledged_control",
                     &CommunicationStatus::last_acknowledged_control)
+      .def_readonly("board_temperature_c", &CommunicationStatus::board_temperature_c)
       .def_property_readonly("feedback_age_ms", [](const CommunicationStatus& status) {
           return status.feedback_age.count();
       })

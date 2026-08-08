@@ -91,6 +91,7 @@ struct CommunicationStatus
     bool protocol_v2_detected = false;
     bool stm32_watchdog_tripped = false;
     std::uint8_t last_acknowledged_control = 0;
+    int board_temperature_c = -1;
     std::chrono::milliseconds feedback_age{0};
     std::uint64_t valid_frames = 0;
     std::uint64_t invalid_frames = 0;

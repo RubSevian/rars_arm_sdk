@@ -134,7 +134,7 @@ bool ArmMotorControl::read(ArmSerialPort& serial, ArmLowState& low_state)
     if (protocol_v2_detected_)
     {
         stm32_watchdog_tripped_ = (payload[ProtocolModeMaskIndex] & 0x80U) != 0U;
-        last_acknowledged_control_ = payload[ProtocolControlIndex];
+        last_acknowledged_control_ = payload[ProtocolControlIndex] & 0x03U;
     }
 
     for (std::size_t i = 0; i < kArmMotorCount; ++i)
@@ -281,11 +281,15 @@ bool ArmMotorControl::decodeMotorFeedback(const ArmSerialPort::Payload& payload,
 
     const std::uint8_t expected_id = static_cast<std::uint8_t>(motor_index + 1U);
 
-    const bool protocol_v2 = payload[ProtocolMarkerIndex] == ProtocolMarker;
-    const bool stm_feedback_valid = !protocol_v2
-                                    || (payload[ProtocolModeMaskIndex]
-                                        & static_cast<std::uint8_t>(1U << motor_index)) != 0U;
-    state.valid_ = stm_feedback_valid && state.motor_id_ == expected_id;
+    /*
+     * The first 56 bytes remain the motor's native feedback frames in both
+     * protocol revisions.  Their returned motor ID is the authoritative
+     * validity check.  Byte 57 in v2 is a best-effort STM freshness snapshot;
+     * it can be zero while an FDCAN interrupt is being serviced on another
+     * bus, even though the copied native feedback frame is valid.  Do not turn
+     * such a valid motor frame into an invalid one here.
+     */
+    state.valid_ = state.motor_id_ == expected_id;
 
     return state.valid_;
 }
